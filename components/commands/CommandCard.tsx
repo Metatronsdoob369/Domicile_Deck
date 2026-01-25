@@ -76,7 +76,7 @@ export function CommandCard({ command }: CommandCardProps) {
       return
     }
     if (result.ok) {
-      console.log('Executed:', result.command)
+      console.log('Executed:', command.command)
       if (result.stdout) console.log(result.stdout)
       if (result.stderr) console.warn(result.stderr)
     }

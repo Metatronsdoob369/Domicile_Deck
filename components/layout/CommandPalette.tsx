@@ -10,6 +10,7 @@ import {
   Database,
   Container,
   Server,
+  ArrowRight,
   Command as CommandIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'

@@ -3,7 +3,7 @@
 import type { Command } from '@/types'
 
 export interface CommandRunResult {
-  ok: boolean
+  ok: true
   command: string
   stdout: string
   stderr: string
@@ -11,10 +11,32 @@ export interface CommandRunResult {
   error?: string
 }
 
+export interface CommandRunFailure {
+  ok: false
+  error: string
+  command?: string
+  stdout?: string
+  stderr?: string
+  exitCode?: number
+  cancelled?: undefined
+}
+
+export interface CommandRunCancelled {
+  ok: false
+  cancelled: true
+  error?: undefined
+}
+
+export type ExecuteCommandResult =
+  | CommandRunResult
+  | CommandRunFailure
+  | CommandRunCancelled
+
+
 export async function runCommand(
   command: Command,
   options?: { args?: string[]; confirm?: boolean; armed?: boolean; timeoutMs?: number }
-): Promise<CommandRunResult> {
+): Promise<CommandRunResult | CommandRunFailure> {
   const response = await fetch('/api/commands/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -42,7 +64,7 @@ export async function runCommand(
   return data as CommandRunResult
 }
 
-export async function executeCommand(command: Command) {
+export async function executeCommand(command: Command): Promise<ExecuteCommandResult> {
   if (command.status !== 'wired') {
     return { ok: false, error: 'Command is not wired yet.' }
   }
