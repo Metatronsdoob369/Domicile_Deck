@@ -141,6 +141,7 @@ export function CommandCard({ command }: CommandCardProps) {
             size="sm"
             onClick={handleExecute}
             disabled={executing || !isWired}
+            title={!isWired ? 'Coming soon — command not yet wired' : undefined}
             className="flex-1"
           >
             {executing ? (
