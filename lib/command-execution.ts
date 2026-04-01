@@ -1,23 +1,15 @@
 'use client'
 
-import type { Command } from '@/types'
+import type { Command, ExecutionMode, RunRecord } from '@/types'
 
 export interface CommandRunResult {
   ok: true
-  command: string
-  stdout: string
-  stderr: string
-  exitCode: number
-  error?: string
+  run: RunRecord
 }
 
 export interface CommandRunFailure {
   ok: false
   error: string
-  command?: string
-  stdout?: string
-  stderr?: string
-  exitCode?: number
   cancelled?: undefined
 }
 
@@ -27,25 +19,30 @@ export interface CommandRunCancelled {
   error?: undefined
 }
 
-export type ExecuteCommandResult =
-  | CommandRunResult
-  | CommandRunFailure
-  | CommandRunCancelled
+export type ExecuteCommandResult = CommandRunResult | CommandRunFailure | CommandRunCancelled
 
+export interface RunCommandOptions {
+  mode?: ExecutionMode
+  args?: string[]
+  confirm?: boolean
+  armed?: boolean
+  timeoutMs?: number
+}
 
 export async function runCommand(
   command: Command,
-  options?: { args?: string[]; confirm?: boolean; armed?: boolean; timeoutMs?: number }
+  options: RunCommandOptions = {}
 ): Promise<CommandRunResult | CommandRunFailure> {
   const response = await fetch('/api/commands/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       commandId: command.id,
-      args: options?.args,
-      confirm: options?.confirm,
-      armed: options?.armed,
-      timeoutMs: options?.timeoutMs,
+      mode: options.mode ?? 'live',
+      args: options.args,
+      confirm: options.confirm,
+      armed: options.armed,
+      timeoutMs: options.timeoutMs,
     }),
   })
 
@@ -53,10 +50,6 @@ export async function runCommand(
   if (!response.ok) {
     return {
       ok: false,
-      command: command.command,
-      stdout: '',
-      stderr: '',
-      exitCode: data?.exitCode ?? 1,
       error: data?.error ?? 'Command failed.',
     }
   }
@@ -64,9 +57,17 @@ export async function runCommand(
   return data as CommandRunResult
 }
 
-export async function executeCommand(command: Command): Promise<ExecuteCommandResult> {
+export async function executeCommand(
+  command: Command,
+  mode: ExecutionMode = 'live'
+): Promise<ExecuteCommandResult> {
   if (command.status !== 'wired') {
     return { ok: false, error: 'Command is not wired yet.' }
+  }
+
+  // Dry-run: skip confirmation dialogs — no side effects.
+  if (mode === 'dry-run') {
+    return runCommand(command, { mode: 'dry-run' })
   }
 
   if (command.requiresConfirmation) {
@@ -81,8 +82,9 @@ export async function executeCommand(command: Command): Promise<ExecuteCommandRe
     if (!armed) {
       return { ok: false, cancelled: true }
     }
-    return runCommand(command, { confirm: true, armed: true })
+    return runCommand(command, { mode, confirm: true, armed: true })
   }
 
-  return runCommand(command, { confirm: command.requiresConfirmation })
+  return runCommand(command, { mode, confirm: command.requiresConfirmation })
 }
+
