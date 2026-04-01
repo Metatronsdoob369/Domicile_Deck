@@ -5,7 +5,7 @@ import { Header } from '@/components/layout/Header'
 import { CommandPalette } from '@/components/layout/CommandPalette'
 
 export const metadata: Metadata = {
-  title: 'DevDeck - Dev Command Toolkit',
+  title: 'Domicile Deck',
   description: 'One interface for all your development tools',
 }
 

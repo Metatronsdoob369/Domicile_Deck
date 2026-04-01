@@ -34,6 +34,35 @@ Set an auth token if you want a shared secret:
 TERMINAL_AUTH_TOKEN=your_token npm run terminal:server
 ```
 
+## Terminal server contract
+
+The optional WebSocket terminal server (`server/terminal-server.js`) exposes a full PTY session over an authenticated WebSocket connection.
+
+| Item | Default | Notes |
+|------|---------|-------|
+| Port | `3211` | Set via `TERMINAL_PORT` |
+| Auth token | _(none)_ | Set `TERMINAL_AUTH_TOKEN`; if set the client must send `{"type":"auth","token":"<value>"}` as the first message |
+| Allowed roots | _(any)_ | Comma-separated absolute paths in `TERMINAL_ALLOWED_ROOTS`; the server rejects `cd` attempts outside these roots |
+| Protocol | WebSocket (`ws://`) | The front-end terminal page connects to `ws://localhost:<TERMINAL_PORT>` |
+
+**Security reminders**
+- Treat the terminal server like SSH — keep it off the public internet.
+- Always set `TERMINAL_AUTH_TOKEN` and `TERMINAL_ALLOWED_ROOTS` in shared or multi-user environments.
+- Bind the server to `127.0.0.1` only (default) and never expose it via a reverse proxy without additional auth.
+
+## Environment variables
+
+Copy `.env.local.example` to `.env.local` and fill in values.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NEXT_PUBLIC_APP_NAME` | No | `Domicile Deck` | Display name used in the UI |
+| `TERMINAL_PORT` | No | `3211` | Port the terminal server listens on |
+| `TERMINAL_ALLOWED_ROOTS` | Recommended | _(any)_ | Comma-separated absolute paths the shell may access |
+| `TERMINAL_AUTH_TOKEN` | Recommended | _(none)_ | Shared secret required to connect to the terminal server |
+| `OPENAI_API_KEY` | No | — | OpenAI key (reserved for future AI-assisted commands) |
+| `VERCEL_ANALYTICS_ID` | No | — | Vercel Analytics project ID |
+
 ## Deployment
 
 Vercel (manual deploy):
