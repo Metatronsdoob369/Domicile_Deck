@@ -74,8 +74,15 @@ export function listRunRecords(limit = 50): RunRecord[] {
 
 // ─── Argument helpers ─────────────────────────────────────────────────────────
 
+/**
+ * Escape a shell argument using single quotes.
+ * Single quotes prevent all shell expansions (variables, command substitution, etc).
+ * The only limitation is that you cannot include a literal single quote.
+ * To work around that, we close the quote, add an escaped quote, and reopen.
+ */
 function quoteArg(value: string): string {
-  return JSON.stringify(value)
+  // Replace each single quote with: '\'' (end quote, escaped quote, start quote)
+  return "'" + value.replace(/'/g, "'\\''") + "'"
 }
 
 export function buildFullCommand(command: Command, args: string[] = []): string {
