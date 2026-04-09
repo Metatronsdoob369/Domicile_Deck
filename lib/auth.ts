@@ -9,6 +9,7 @@ import CredentialsProvider from 'next-auth/providers/credentials'
 import GithubProvider from 'next-auth/providers/github'
 import type { AuthOptions } from 'next-auth'
 import type { UserRole } from '@/types'
+import { getSupabaseService } from '@/lib/supabase'
 
 // ─── Static user table (replace with Supabase lookup when ready) ──────────────
 
@@ -59,6 +60,36 @@ function findLocalUser(email: string, password: string): LocalUser | null {
   return user
 }
 
+/**
+ * Look up a user's role from Supabase by email.
+ * Returns the stored role, or 'viewer' if the user is not found or Supabase is unavailable.
+ */
+async function lookupUserRoleFromSupabase(email: string): Promise<UserRole> {
+  const client = getSupabaseService()
+  if (!client) return 'viewer'
+
+  try {
+    const { data, error } = await client
+      .from('users')
+      .select('role')
+      .eq('email', email)
+      .single()
+
+    if (error || !data) {
+      return 'viewer'
+    }
+
+    const role = data.role as UserRole
+    // Validate that role is one of the valid roles
+    if (['admin', 'operator', 'viewer'].includes(role)) {
+      return role
+    }
+    return 'viewer'
+  } catch {
+    return 'viewer'
+  }
+}
+
 // ─── NextAuth config ──────────────────────────────────────────────────────────
 
 export const authOptions: AuthOptions = {
@@ -91,7 +122,14 @@ export const authOptions: AuthOptions = {
     /** Embed role in the JWT so it survives serialization. */
     async jwt({ token, user }) {
       if (user) {
-        token.role = (user as { role?: UserRole }).role ?? 'viewer'
+        let role = (user as { role?: UserRole }).role
+
+        // If the user doesn't have a role (e.g., OAuth providers), look it up from Supabase.
+        if (!role && user.email) {
+          role = await lookupUserRoleFromSupabase(user.email)
+        }
+
+        token.role = role ?? 'viewer'
         token.id = user.id
       }
       return token
