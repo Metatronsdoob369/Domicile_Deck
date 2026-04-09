@@ -3,6 +3,7 @@ import './globals.css'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { Header } from '@/components/layout/Header'
 import { CommandPalette } from '@/components/layout/CommandPalette'
+import { Providers } from '@/components/layout/Providers'
 
 export const metadata: Metadata = {
   title: 'Domicile Deck',
@@ -17,16 +18,18 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground">
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <Header />
-            <main className="flex-1 overflow-auto p-6">
-              {children}
-            </main>
+        <Providers>
+          <div className="flex h-screen overflow-hidden">
+            <Sidebar />
+            <div className="flex flex-1 flex-col overflow-hidden">
+              <Header />
+              <main className="flex-1 overflow-auto p-6">
+                {children}
+              </main>
+            </div>
           </div>
-        </div>
-        <CommandPalette />
+          <CommandPalette />
+        </Providers>
       </body>
     </html>
   )

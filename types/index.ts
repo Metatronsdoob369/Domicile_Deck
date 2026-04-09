@@ -2,6 +2,40 @@ export type ServiceType = 'vercel' | 'github' | 'docker' | 'database' | 'ssh' | 
 
 export type ProjectStatus = 'active' | 'idle' | 'error' | 'deploying'
 
+// ─── Execution & Runs ────────────────────────────────────────────────────────
+
+/** How a command will be run. */
+export type ExecutionMode = 'dry-run' | 'guarded' | 'live'
+
+/** Lifecycle states of a single run. */
+export type RunStatus = 'queued' | 'running' | 'completed' | 'failed'
+
+/** Persisted record of one command execution attempt. */
+export interface RunRecord {
+  id: string
+  commandId: string
+  mode: ExecutionMode
+  status: RunStatus
+  output: string
+  stderr: string
+  exitCode: number | null
+  executedBy: string
+  executedAt: string
+  completedAt: string | null
+}
+
+// ─── Authorization ───────────────────────────────────────────────────────────
+
+/** Access roles for controlling command permissions. */
+export type UserRole = 'admin' | 'operator' | 'viewer'
+
+export interface AppUser {
+  id: string
+  name: string
+  email: string
+  role: UserRole
+}
+
 export interface Project {
   id: string
   name: string
