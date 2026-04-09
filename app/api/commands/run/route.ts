@@ -56,8 +56,9 @@ export async function POST(request: NextRequest) {
 
   // ── Rate limiting ─────────────────────────────────────────────────────────
   // Prefer authenticated identity; fall back to IP header for anonymous callers.
+  // Use token.id (explicitly set in JWT callback) rather than token.sub for guaranteed availability.
   const rateLimitKey =
-    token?.sub ??
+    (token?.id as string | undefined) ??
     (request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? 'anon')
       .split(',')[0]
       .trim()
