@@ -39,8 +39,8 @@ export function Header() {
   return (
     <header className="flex h-16 items-center justify-between border-b border-border bg-card px-6">
       <div>
-        <h1 className="text-xl font-semibold">
-          {pageTitles[pathname] || 'DevDeck'}
+        <h1 className="text-xl font-light tracking-[0.25em] uppercase text-gold">
+          {pageTitles[pathname] || 'Protocol'}
         </h1>
       </div>
 

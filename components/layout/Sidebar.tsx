@@ -54,11 +54,14 @@ export function Sidebar() {
     >
       <div className="flex h-16 items-center justify-between px-4 border-b border-border">
         {!collapsed && (
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Zap className="h-5 w-5 text-primary-foreground" />
+          <Link href="/" className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded border border-gold-dim bg-deep shadow-[0_0_15px_rgba(201,168,76,0.1)]">
+              <Zap className="h-6 w-6 text-gold" />
             </div>
-            <span className="font-bold text-lg">DevDeck</span>
+            <div className="flex flex-col">
+              <span className="font-light text-lg tracking-[0.2em] text-white uppercase">Protocol</span>
+              <span className="text-[9px] text-muted-foreground tracking-[0.3em] uppercase -mt-1 font-mono">Autonomous</span>
+            </div>
           </Link>
         )}
         <button
