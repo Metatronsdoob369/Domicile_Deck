@@ -56,15 +56,84 @@ const PRESETS: Record<string, Partial<RadarParams>> = {
 }
 
 const STORAGE_KEY = 'spectra-radar-params'
+const HW_HASH_KEY = 'spectra-radar-hw-hash'
+
+// ── Hardware Detection ──────────────────────────────────────
+type HardwareClass = 'HIGH' | 'MID' | 'LOW'
+
+interface HardwareProfile {
+  cores: number
+  memory: number  // GB (0 if unavailable)
+  gpu: string
+  hwClass: HardwareClass
+  hash: string
+}
+
+function detectHardware(): HardwareProfile {
+  if (typeof window === 'undefined') {
+    return { cores: 4, memory: 4, gpu: 'unknown', hwClass: 'MID', hash: 'ssr' }
+  }
+
+  const cores = navigator.hardwareConcurrency || 4
+  const memory = (navigator as any).deviceMemory || 0 // Chrome-only, 0 = unknown
+
+  // Probe GPU via throwaway WebGL context
+  let gpu = 'unknown'
+  try {
+    const canvas = document.createElement('canvas')
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl')
+    if (gl) {
+      const debugInfo = (gl as WebGLRenderingContext).getExtension('WEBGL_debug_renderer_info')
+      if (debugInfo) {
+        gpu = (gl as WebGLRenderingContext).getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || 'unknown'
+      }
+    }
+  } catch {}
+
+  // Capability scoring
+  let score = 0
+  score += cores >= 8 ? 2 : cores >= 4 ? 1 : 0
+  score += memory >= 8 ? 2 : memory >= 4 ? 1 : 0 // 0 if unknown = conservative
+  const gpuLower = gpu.toLowerCase()
+  const isDiscrete = /nvidia|radeon|geforce|rtx|gtx|rx\s/i.test(gpuLower)
+  score += isDiscrete ? 2 : /intel|apple|mesa|swiftshader/i.test(gpuLower) ? 1 : 0
+
+  const hwClass: HardwareClass = score >= 5 ? 'HIGH' : score >= 3 ? 'MID' : 'LOW'
+  const hash = `${cores}-${memory}-${gpu.slice(0, 30)}`
+
+  return { cores, memory, gpu, hwClass, hash }
+}
+
+function presetForHardware(hwClass: HardwareClass): string {
+  switch (hwClass) {
+    case 'HIGH': return 'PERFORMANCE'
+    case 'MID':  return 'BALANCED'
+    case 'LOW':  return 'LEAN'
+  }
+}
 
 // ── Persist / Restore from localStorage ─────────────────────
-function loadParams(): RadarParams {
-  if (typeof window === 'undefined') return { ...DEFAULT_PARAMS }
+function loadParams(hw: HardwareProfile): { params: RadarParams; wasCalibrated: boolean } {
+  if (typeof window === 'undefined') return { params: { ...DEFAULT_PARAMS }, wasCalibrated: false }
+
   try {
+    const savedHash = localStorage.getItem(HW_HASH_KEY)
     const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) return { ...DEFAULT_PARAMS, ...JSON.parse(saved) }
+
+    // If same machine and we have saved settings, restore them
+    if (savedHash === hw.hash && saved) {
+      return { params: { ...DEFAULT_PARAMS, ...JSON.parse(saved) }, wasCalibrated: false }
+    }
+
+    // Different machine or first load → auto-calibrate
+    const preset = presetForHardware(hw.hwClass)
+    const calibrated = { ...DEFAULT_PARAMS, ...PRESETS[preset] }
+    localStorage.setItem(HW_HASH_KEY, hw.hash)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(calibrated))
+    return { params: calibrated, wasCalibrated: true }
   } catch {}
-  return { ...DEFAULT_PARAMS }
+
+  return { params: { ...DEFAULT_PARAMS }, wasCalibrated: false }
 }
 
 function saveParams(params: RadarParams) {
@@ -189,7 +258,9 @@ const ParticleField = ({
 // ── Main Component ──────────────────────────────────────────
 export function SpectraRadar() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const paramsRef = useRef<RadarParams>(loadParams())
+  const [hwProfile] = useState(() => detectHardware())
+  const [initState] = useState(() => loadParams(hwProfile))
+  const paramsRef = useRef<RadarParams>(initState.params)
   const guiRef = useRef<any>(null)
 
   const [tick, setTick] = useState(0)
@@ -198,7 +269,11 @@ export function SpectraRadar() {
     signature: 'CALIBRATING',
     points: 0,
   })
-  const [governorStatus, setGovernorStatus] = useState('')
+  const [governorStatus, setGovernorStatus] = useState(
+    initState.wasCalibrated
+      ? `AUTO-CALIBRATED → ${presetForHardware(hwProfile.hwClass)} (${hwProfile.cores} cores, ${hwProfile.gpu.slice(0, 24)})`
+      : ''
+  )
   const [currentFps, setCurrentFps] = useState(60)
 
   // FPS gauge callback (fires ~2x/sec from AutoGovernor)
@@ -392,6 +467,13 @@ export function SpectraRadar() {
           <div className="opacity-50">
             STATUS:{' '}
             {points.length > 0 ? 'REAL-TIME SYNC' : 'SIMULATING...'}
+          </div>
+          <div className={`mt-1 text-[8px] tracking-[0.15em] ${
+            hwProfile.hwClass === 'HIGH' ? 'text-emerald-400/50'
+              : hwProfile.hwClass === 'MID' ? 'text-amber-400/50'
+              : 'text-red-400/50'
+          }`}>
+            HW: {hwProfile.hwClass} ({hwProfile.cores}C{hwProfile.memory ? ` / ${hwProfile.memory}GB` : ''} / {hwProfile.gpu.slice(0, 20)})
           </div>
         </div>
 
