@@ -77,12 +77,15 @@ function saveParams(params: RadarParams) {
 const AutoGovernor = ({
   paramsRef,
   onThrottle,
+  onFpsUpdate,
 }: {
   paramsRef: React.MutableRefObject<RadarParams>
   onThrottle: (fps: number, newMax: number) => void
+  onFpsUpdate: (fps: number) => void
 }) => {
   const fpsHistory = useRef<number[]>([])
   const lastThrottle = useRef(0)
+  const lastReport = useRef(0)
 
   useFrame((_, delta) => {
     const fps = 1 / Math.max(delta, 0.001)
@@ -97,6 +100,12 @@ const AutoGovernor = ({
     const avgFps =
       fpsHistory.current.reduce((a, b) => a + b) / fpsHistory.current.length
     const now = performance.now()
+
+    // Report FPS to HUD gauge every ~500ms
+    if (now - lastReport.current > 500) {
+      onFpsUpdate(Math.round(avgFps))
+      lastReport.current = now
+    }
 
     // Throttle: if average FPS drops below 28, reduce maxPoints
     // Cooldown: only intervene once every 3 seconds
@@ -190,6 +199,12 @@ export function SpectraRadar() {
     points: 0,
   })
   const [governorStatus, setGovernorStatus] = useState('')
+  const [currentFps, setCurrentFps] = useState(60)
+
+  // FPS gauge callback (fires ~2x/sec from AutoGovernor)
+  const handleFpsUpdate = useCallback((fps: number) => {
+    setCurrentFps(fps)
+  }, [])
 
   // Bump: triggers React re-render + persists settings
   const bump = useCallback(() => {
@@ -351,8 +366,12 @@ export function SpectraRadar() {
           <ParticleField points={points} paramsRef={paramsRef} />
         )}
 
-        {/* Auto-Governor: monitors FPS and auto-throttles */}
-        <AutoGovernor paramsRef={paramsRef} onThrottle={handleThrottle} />
+        {/* Auto-Governor: monitors FPS, reports gauge, auto-throttles */}
+        <AutoGovernor
+          paramsRef={paramsRef}
+          onThrottle={handleThrottle}
+          onFpsUpdate={handleFpsUpdate}
+        />
 
         <OrbitControls
           enableZoom={true}
@@ -387,12 +406,51 @@ export function SpectraRadar() {
           </div>
         </div>
 
-        {/* Auto-Governor Alert */}
-        {governorStatus && (
-          <div className="absolute bottom-8 left-8 px-3 py-1.5 bg-red-900/40 border border-red-500/30 text-red-400 text-[9px] tracking-wider animate-pulse">
-            🛡 {governorStatus}
+        {/* ── FPS Gauge ──────────────────────────────────── */}
+        <div className="absolute bottom-8 left-8">
+          <div className="text-[8px] text-white/30 tracking-[0.2em] mb-1">SYSTEM HEALTH</div>
+          <div className="flex items-center gap-2">
+            <span
+              className={`text-[14px] font-bold font-mono ${
+                currentFps >= 45
+                  ? 'text-emerald-400'
+                  : currentFps >= 28
+                  ? 'text-amber-400'
+                  : 'text-red-400'
+              }`}
+            >
+              {currentFps}
+            </span>
+            <span className="text-[8px] text-white/20">FPS</span>
           </div>
-        )}
+          {/* Gauge bar */}
+          <div className="w-24 h-1.5 bg-white/5 mt-1 overflow-hidden">
+            <div
+              className={`h-full transition-all duration-500 ${
+                currentFps >= 45
+                  ? 'bg-emerald-400/70'
+                  : currentFps >= 28
+                  ? 'bg-amber-400/70'
+                  : 'bg-red-400/70'
+              }`}
+              style={{ width: `${Math.min(100, (currentFps / 60) * 100)}%` }}
+            />
+          </div>
+          <div className="text-[7px] text-white/15 mt-0.5">
+            {currentFps >= 45
+              ? 'NOMINAL'
+              : currentFps >= 28
+              ? 'ELEVATED — CONSIDER LEAN'
+              : 'CRITICAL — AUTO-GOV ACTIVE'}
+          </div>
+
+          {/* Auto-Governor Alert */}
+          {governorStatus && (
+            <div className="mt-2 px-3 py-1.5 bg-red-900/40 border border-red-500/30 text-red-400 text-[9px] tracking-wider animate-pulse">
+              🛡 {governorStatus}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10">
