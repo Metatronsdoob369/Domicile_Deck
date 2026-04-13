@@ -16,3 +16,4 @@ pnpm-debug.log*
 .pnp.js
 .vercel
 *.tsbuildinfo
+.env

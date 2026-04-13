@@ -1,19 +1,26 @@
 import { NextResponse } from 'next/server';
 
 /**
- * SPECTRAL REPAIR API
+ * SPECTRAL REPAIR API — REFRAG 3072-D PIPELINE
  * 
- * The product: Takes broken Luau code, vectorizes it locally (Ollama),
- * compares against canonical vault, identifies weak sectors, and sends
- * an augmented repair prompt to GPT-4o.
+ * The sovereign repair engine. Takes broken Luau code, embeds it at 3072-D
+ * using OpenAI text-embedding-3-large (matching the REFRAG canonical vault),
+ * queries Qdrant for the nearest canonical match with pre-computed spectral
+ * context (heat, shatter, sector scores, eigenvalues), and sends an
+ * augmented repair prompt to GPT-4o.
+ * 
+ * Distance metrics: Manhattan (L1) for heat, Euclidean (L2) for shatter,
+ * Cosine for structural similarity. All vectors L2-normalized.
  * 
  * Proven result: 96.4% alignment vs 72.7% baseline (33% improvement).
  * Canonical data architecture beats fine-tuning with a stock model.
  */
 
-const OLLAMA_URL = 'http://localhost:11434/api/embeddings';
-const OLLAMA_MODEL = 'mxbai-embed-large:latest';
-const CANONICAL_DIR = '/Users/joewales/NODE_OUT_Master/open-model-contracts/src/canonical';
+// ── Infrastructure Endpoints ────────────────────────────────
+const QDRANT_URL = 'http://localhost:6340';
+const QDRANT_COLLECTION = 'spectral-heatmap';
+const OPENAI_EMBED_MODEL = 'text-embedding-3-large';
+const OPENAI_REPAIR_MODEL = 'gpt-4o';
 
 // Sector definitions for code analysis
 const SECTORS = [
@@ -41,27 +48,38 @@ interface RepairResult {
   };
 }
 
-// --- Embedding Utilities (Local Ollama) ---
+// ── 3072-D Embedding (REFRAG Pipeline) ──────────────────────
 
-async function embed(text: string): Promise<number[]> {
-  try {
-    const res = await fetch(OLLAMA_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: OLLAMA_MODEL, prompt: text })
-    });
-    const data = await res.json();
-    return data.embedding;
-  } catch {
-    // Fallback: simple character frequency hash
-    const vec = new Array(1024).fill(0);
-    for (let i = 0; i < text.length; i++) {
-      vec[text.charCodeAt(i) % 1024] += 1;
-    }
-    const norm = Math.sqrt(vec.reduce((s: number, v: number) => s + v * v, 0)) || 1;
-    return vec.map((v: number) => v / norm);
+async function embed3072(text: string): Promise<number[]> {
+  const res = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: OPENAI_EMBED_MODEL,
+      input: text,
+    })
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`REFRAG embed failed: ${res.status} — ${err}`);
   }
+
+  const data = await res.json();
+  return data.data[0].embedding; // 3072-D vector
 }
+
+// ── L2 Normalization ────────────────────────────────────────
+
+function l2Normalize(vec: number[]): number[] {
+  const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
+  return vec.map(v => v / norm);
+}
+
+// ── Distance Metrics ────────────────────────────────────────
 
 function cosineSimilarity(a: number[], b: number[]): number {
   const len = Math.min(a.length, b.length);
@@ -74,21 +92,103 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB) || 1);
 }
 
-function calculateHeat(vec: number[]): number {
-  return vec.reduce((s, v) => s + Math.abs(v), 0) / 64.0;
-}
-
-function calculateShatter(vec: number[], centroid: number[]): number {
-  const len = Math.min(vec.length, centroid.length);
-  let distSq = 0;
+function manhattanDistance(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  let sum = 0;
   for (let i = 0; i < len; i++) {
-    distSq += (vec[i] - centroid[i]) ** 2;
+    sum += Math.abs(a[i] - b[i]);
   }
-  return Math.sqrt(distSq);
+  return sum;
 }
 
-// Analyze sector strengths by keyword presence + embedding sub-ranges
-function analyzeSectors(code: string, vec: number[]) {
+function l2Distance(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  let sum = 0;
+  for (let i = 0; i < len; i++) {
+    sum += (a[i] - b[i]) ** 2;
+  }
+  return Math.sqrt(sum);
+}
+
+// Heat = normalized Manhattan magnitude (L1 resonance)
+function calculateHeat(vec: number[]): number {
+  return vec.reduce((s, v) => s + Math.abs(v), 0) / vec.length;
+}
+
+// ── Qdrant Vector Search ────────────────────────────────────
+
+interface QdrantMatch {
+  id: string | number;
+  score: number;
+  payload: {
+    file?: string;
+    genre?: string;
+    kind?: string;
+    heat?: number;
+    shatter?: number;
+    sectorScores?: Record<string, number>;
+    nearestCanonical?: { file: string; similarity: number };
+    heatKernelRow?: number[];
+    eigenvalues?: number[];
+    position3d?: number[];
+    deltaVector3d?: number[];
+  };
+}
+
+async function queryQdrant(vector: number[], limit: number = 3): Promise<QdrantMatch[]> {
+  const res = await fetch(`${QDRANT_URL}/collections/${QDRANT_COLLECTION}/points/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      vector,
+      limit,
+      with_payload: true,
+    })
+  });
+
+  if (!res.ok) {
+    throw new Error(`Qdrant search failed: ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  return data.result || [];
+}
+
+// Fetch the full canonical code from the filesystem for the repair prompt
+async function loadCanonicalCode(filename: string): Promise<string> {
+  const fs = await import('fs');
+  const path = await import('path');
+
+  // Check multiple possible locations
+  const searchPaths = [
+    path.join('/Users/joewales/NODE_OUT_Master/open-model-contracts/src/canonical', filename),
+    path.join('/Users/joewales/NODE_OUT_Master/open-model-contracts/data/ingestion-landing', filename),
+  ];
+
+  for (const p of searchPaths) {
+    try {
+      if (fs.existsSync(p)) return fs.readFileSync(p, 'utf-8');
+    } catch {}
+  }
+
+  // Search subdirectories of ingestion-landing
+  const landingDir = '/Users/joewales/NODE_OUT_Master/open-model-contracts/data/ingestion-landing';
+  try {
+    const genres = fs.readdirSync(landingDir);
+    for (const genre of genres) {
+      const genrePath = path.join(landingDir, genre, filename);
+      try {
+        if (fs.existsSync(genrePath)) return fs.readFileSync(genrePath, 'utf-8');
+      } catch {}
+    }
+  } catch {}
+
+  return `-- [Canonical source not found on disk: ${filename}]`;
+}
+
+// ── Sector Analysis ─────────────────────────────────────────
+
+function analyzeSectors(code: string) {
   const sectorKeywords: Record<string, string[]> = {
     Client_Visual: ['gui', 'screen', 'frame', 'button', 'text', 'image', 'ui', 'render', 'camera'],
     Server_Logic: ['server', 'remote', 'fire', 'invoke', 'bind', 'onserverinvoke'],
@@ -110,13 +210,12 @@ function analyzeSectors(code: string, vec: number[]) {
   }
 
   scores.sort((a, b) => a.score - b.score);
-  const weak = scores.filter(s => s.score < 0.5);
-  const strong = scores.filter(s => s.score >= 0.5);
-
-  return { weak, strong };
+  return {
+    weak: scores.filter(s => s.score < 0.5),
+    strong: scores.filter(s => s.score >= 0.5),
+  };
 }
 
-// Detect genre from code patterns
 function detectGenre(code: string): string {
   const lower = code.toLowerCase();
   if (lower.includes('pizza') || lower.includes('cook') || lower.includes('order')) return 'tycoon';
@@ -127,59 +226,107 @@ function detectGenre(code: string): string {
   return 'general';
 }
 
-// --- Main Repair Logic ---
+// ── Main Repair Logic (REFRAG 3072-D Pipeline) ──────────────
 
 async function spectralRepair(brokenCode: string): Promise<RepairResult> {
-  // 1. Embed the broken code
-  const brokenVec = await embed(brokenCode);
+  console.log('🔬 [REFRAG] Embedding broken code at 3072-D...');
   
-  // 2. Load and embed all canonical references
-  const fs = await import('fs');
-  const path = await import('path');
-  
-  let canonicalFiles: { file: string; code: string; vec: number[] }[] = [];
-  try {
-    const files = fs.readdirSync(CANONICAL_DIR).filter((f: string) => f.endsWith('.lua'));
-    for (const file of files) {
-      const code = fs.readFileSync(path.join(CANONICAL_DIR, file), 'utf-8');
-      const vec = await embed(code);
-      canonicalFiles.push({ file, code, vec });
-    }
-  } catch (e) {
-    console.error('Failed to read canonical directory:', e);
-  }
+  // 1. Embed the broken code with text-embedding-3-large (3072-D)
+  const brokenVec = l2Normalize(await embed3072(brokenCode));
 
-  // 3. Find nearest canonical match
+  // 2. Query Qdrant for nearest canonical matches
+  console.log('🔍 [REFRAG] Querying Qdrant vault for canonical matches...');
+  let qdrantMatches: QdrantMatch[] = [];
   let bestMatch = { file: '', similarity: 0, code: '' };
-  for (const canonical of canonicalFiles) {
-    const sim = cosineSimilarity(brokenVec, canonical.vec);
-    if (sim > bestMatch.similarity) {
-      bestMatch = { file: canonical.file, similarity: sim, code: canonical.code };
+  let vaultHeat = 0;
+  let vaultShatter = 0;
+  let vaultSectorScores: Record<string, number> = {};
+  let vaultEigenvalues: number[] = [];
+
+  try {
+    qdrantMatches = await queryQdrant(brokenVec, 3);
+
+    if (qdrantMatches.length > 0) {
+      const top = qdrantMatches[0];
+      const filename = top.payload.file || 'unknown.lua';
+      bestMatch = {
+        file: filename,
+        similarity: top.score,
+        code: await loadCanonicalCode(filename),
+      };
+
+      // Pull pre-computed spectral context from the vault
+      vaultHeat = top.payload.heat || 0;
+      vaultShatter = top.payload.shatter || 0;
+      vaultSectorScores = top.payload.sectorScores || {};
+      vaultEigenvalues = top.payload.eigenvalues || [];
+
+      console.log(`📊 [REFRAG] Top match: ${filename} (score: ${top.score.toFixed(4)})`);
+    }
+  } catch (e: any) {
+    console.warn('⚠️ [REFRAG] Qdrant unavailable, falling back to local comparison:', e.message);
+    // Fallback: load canonical files and embed them for comparison
+    const fs = await import('fs');
+    const path = await import('path');
+    const canonDir = '/Users/joewales/NODE_OUT_Master/open-model-contracts/src/canonical';
+    try {
+      const files = fs.readdirSync(canonDir).filter((f: string) => f.endsWith('.lua'));
+      for (const file of files) {
+        const code = fs.readFileSync(path.join(canonDir, file), 'utf-8');
+        const vec = l2Normalize(await embed3072(code));
+        const sim = cosineSimilarity(brokenVec, vec);
+        if (sim > bestMatch.similarity) {
+          bestMatch = { file, similarity: sim, code };
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Compute spectral metrics on the broken code itself
+  const liveHeat = calculateHeat(brokenVec);
+  const liveManhattan = bestMatch.code
+    ? manhattanDistance(brokenVec, l2Normalize(await embed3072(bestMatch.code)))
+    : 0;
+  const liveL2 = bestMatch.code
+    ? l2Distance(brokenVec, l2Normalize(await embed3072(bestMatch.code)))
+    : 0;
+
+  const heat = vaultHeat || liveHeat;
+  const shatter = vaultShatter || liveL2;
+  const genre = detectGenre(brokenCode);
+  const { weak, strong } = analyzeSectors(brokenCode);
+
+  // Merge vault sector scores with keyword-based analysis
+  if (Object.keys(vaultSectorScores).length > 0) {
+    for (const s of [...weak, ...strong]) {
+      if (vaultSectorScores[s.name] !== undefined) {
+        // Blend: 60% vault (embedding-based), 40% keyword-based
+        s.score = Math.round((vaultSectorScores[s.name] * 0.6 + s.score * 0.4) * 100) / 100;
+      }
     }
   }
 
-  // 4. Calculate spectral metrics
-  const centroid = new Array(brokenVec.length).fill(0.1);
-  const shatter = calculateShatter(brokenVec, centroid);
-  const heat = calculateHeat(brokenVec);
-  const genre = detectGenre(brokenCode);
-  const { weak, strong } = analyzeSectors(brokenCode, brokenVec);
-
-  // 5. Build augmented repair prompt with spectral context
+  // 4. Build augmented repair prompt with REAL 3072-D spectral context
+  console.log('🧠 [REFRAG] Building spectral-augmented repair prompt...');
   const augmentedPrompt = `You are a Roblox Luau expert. Repair this broken game script.
 
-SPECTRAL ANALYSIS (3072-D embedding comparison):
+SPECTRAL ANALYSIS (REFRAG 3072-D Embedding Pipeline):
+- Embedding model: text-embedding-3-large (3072 dimensions, L2-normalized)
 - Nearest canonical match: ${bestMatch.file} (cosine similarity: ${bestMatch.similarity.toFixed(4)})
 - Genre: ${genre}
-- Shatter distance: ${shatter.toFixed(4)}
+- Manhattan distance (L1): ${liveManhattan.toFixed(4)}
+- Euclidean distance (L2): ${liveL2.toFixed(4)}
+- Heat (L1 resonance): ${heat.toFixed(6)}
+- Shatter (L2 fracture): ${shatter.toFixed(6)}
+${vaultEigenvalues.length > 0 ? `- Graph eigenvalues: [${vaultEigenvalues.slice(0, 5).map(v => v.toFixed(4)).join(', ')}...]` : ''}
 - Weak sectors (need repair): ${weak.map(s => `${s.name} (${s.score})`).join(', ')}
 - Strong sectors (preserve): ${strong.map(s => `${s.name} (${s.score})`).join(', ')}
-- Heat (Manhattan resonance): ${heat.toFixed(6)}
 
 REPAIR GUIDANCE:
 - Focus repair effort on weak sectors
 - Preserve patterns found in strong sectors
 - Use the canonical reference below as the ground truth for correct structure
+- The broken code has a Manhattan distance of ${liveManhattan.toFixed(4)} from the canonical — aim to minimize this
 
 CANONICAL REFERENCE (${bestMatch.file}):
 \`\`\`lua
@@ -193,39 +340,29 @@ ${brokenCode}
 
 Return ONLY the repaired Lua code, no explanations.`;
 
-  // 6. Send to GPT-4o via bridge server
+  // 5. Send to GPT-4o for repair
+  console.log('🔧 [REFRAG] Sending to GPT-4o for spectral-augmented repair...');
   let augmentedRepair = '';
   let baselineRepair = '';
-  
+
   try {
-    // Augmented repair (with spectral context)
-    const augRes = await fetch('http://localhost:8080/v1/delivery/nl-to-game', {
+    // Augmented repair (with full 3072-D spectral context)
+    const augRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: augmentedPrompt })
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: OPENAI_REPAIR_MODEL,
+        messages: [{ role: 'user', content: augmentedPrompt }],
+        temperature: 0.2
+      })
     });
     const augData = await augRes.json();
-    augmentedRepair = augData.luau || augData.code || augData.result || JSON.stringify(augData);
-  } catch (e) {
-    // Fallback: try OpenAI directly if bridge is down
-    try {
-      const directRes = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o',
-          messages: [{ role: 'user', content: augmentedPrompt }],
-          temperature: 0.2
-        })
-      });
-      const directData = await directRes.json();
-      augmentedRepair = directData.choices?.[0]?.message?.content || 'Repair failed';
-    } catch {
-      augmentedRepair = '-- Repair service unavailable. Bridge (8080) and OpenAI both failed.';
-    }
+    augmentedRepair = augData.choices?.[0]?.message?.content || '-- Augmented repair failed';
+  } catch (e: any) {
+    augmentedRepair = `-- Augmented repair failed: ${e.message}`;
   }
 
   try {
@@ -238,7 +375,7 @@ Return ONLY the repaired Lua code, no explanations.`;
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: OPENAI_REPAIR_MODEL,
         messages: [{ role: 'user', content: basePrompt }],
         temperature: 0.2
       })
@@ -249,18 +386,50 @@ Return ONLY the repaired Lua code, no explanations.`;
     baselineRepair = '-- Baseline repair failed.';
   }
 
-  // 7. Score both repairs against canonical
-  const augVec = await embed(augmentedRepair);
-  const baseVec = await embed(baselineRepair);
-  
-  const augSim = bestMatch.similarity > 0 ? cosineSimilarity(augVec, canonicalFiles.find(c => c.file === bestMatch.file)!.vec) : 0;
-  const baseSim = bestMatch.similarity > 0 ? cosineSimilarity(baseVec, canonicalFiles.find(c => c.file === bestMatch.file)!.vec) : 0;
+  // 6. Score both repairs against canonical at 3072-D
+  console.log('📐 [REFRAG] Scoring repairs at 3072-D...');
+  const augVec = l2Normalize(await embed3072(augmentedRepair));
+  const baseVec = l2Normalize(await embed3072(baselineRepair));
+
+  let canonVec: number[] | null = null;
+  if (qdrantMatches.length > 0) {
+    // Re-query Qdrant for the canonical vector directly
+    try {
+      const scrollRes = await fetch(`${QDRANT_URL}/collections/${QDRANT_COLLECTION}/points/scroll`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          limit: 20,
+          with_vector: true,
+          with_payload: true,
+          filter: {
+            must: [{ key: 'file', match: { value: bestMatch.file } }]
+          }
+        })
+      });
+      const scrollData = await scrollRes.json();
+      const matchPoint = scrollData.result?.points?.[0];
+      if (matchPoint?.vector) {
+        canonVec = matchPoint.vector;
+      }
+    } catch {}
+  }
+
+  // If we couldn't get the vector from Qdrant, embed the canonical code
+  if (!canonVec && bestMatch.code) {
+    canonVec = l2Normalize(await embed3072(bestMatch.code));
+  }
+
+  const augSim = canonVec ? cosineSimilarity(augVec, canonVec) : 0;
+  const baseSim = canonVec ? cosineSimilarity(baseVec, canonVec) : 0;
+
+  console.log(`✅ [REFRAG] Complete | Augmented: ${augSim.toFixed(4)} vs Baseline: ${baseSim.toFixed(4)} | Winner: ${augSim > baseSim ? 'SPECTRAL_AUGMENTED' : 'BASELINE'}`);
 
   return {
     success: true,
     brokenCode,
     repairedCode: augmentedRepair,
-    canonicalMatch: { file: bestMatch.file, similarity: bestMatch.similarity },
+    canonicalMatch: bestMatch.file ? { file: bestMatch.file, similarity: bestMatch.similarity } : null,
     spectralContext: {
       shatterDistance: shatter,
       heat,
@@ -276,7 +445,7 @@ Return ONLY the repaired Lua code, no explanations.`;
   };
 }
 
-// --- HTTP Handler ---
+// ── HTTP Handlers ───────────────────────────────────────────
 
 export async function POST(req: Request) {
   try {
@@ -287,9 +456,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing "code" field' }, { status: 400 });
     }
 
-    console.log(`\n🔬 [SPECTRAL-REPAIR] Incoming repair request (${code.length} chars)`);
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: 'OPENAI_API_KEY not configured in Domicile_Deck .env' }, { status: 500 });
+    }
+
+    console.log(`\n🔬 [REFRAG-REPAIR] Incoming repair request (${code.length} chars)`);
     const result = await spectralRepair(code);
-    console.log(`✅ [SPECTRAL-REPAIR] Complete | Winner: ${result.verdict.winner} | Aug: ${result.verdict.augmentedSimilarity.toFixed(4)} vs Base: ${result.verdict.baselineSimilarity.toFixed(4)}`);
 
     return NextResponse.json(result);
   } catch (error: any) {
@@ -300,7 +472,11 @@ export async function POST(req: Request) {
 
 export async function GET() {
   return NextResponse.json({
-    service: 'Spectral Repair Engine',
+    service: 'REFRAG Spectral Repair Engine',
+    pipeline: '3072-D (text-embedding-3-large)',
+    metrics: ['cosine', 'manhattan (L1)', 'euclidean (L2)'],
+    normalization: 'L2',
+    vault: `Qdrant (${QDRANT_URL}/${QDRANT_COLLECTION})`,
     status: 'online',
     thesis: 'Canonical data architecture beats fine-tuning. Stock GPT-4o + 3072-D structural context = 33% improvement.',
     benchmark: { augmented: 0.9644, baseline: 0.7269, improvement: '32.7%' }
