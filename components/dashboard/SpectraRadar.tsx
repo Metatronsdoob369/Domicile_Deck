@@ -2,132 +2,282 @@
 
 import React, { useRef, useMemo, useState, useEffect } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
-import { Points, PointMaterial, OrbitControls, Float } from '@react-three/drei'
+import { Points, PointMaterial, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 
-const ParticleField = ({ points }: { points: any[] }) => {
-  const ref = useRef<any>()
-  
+// ── Governance Parameters (lil-gui binds to this object) ────
+interface RadarParams {
+  maxPoints: number
+  pollInterval: number
+  particleSize: number
+  rotationSpeed: number
+  autoRotateSpeed: number
+  autoRotate: boolean
+  heatRange: number
+  heatBase: number
+  coreOpacity: number
+}
+
+const DEFAULT_PARAMS: RadarParams = {
+  maxPoints: 5000,
+  pollInterval: 3000,
+  particleSize: 0.15,
+  rotationSpeed: 0.001,
+  autoRotateSpeed: 0.5,
+  autoRotate: true,
+  heatRange: 0.4,
+  heatBase: 0.6,
+  coreOpacity: 0.3,
+}
+
+// ── Particle Field (Three.js inner component) ───────────────
+const ParticleField = ({
+  points,
+  paramsRef,
+}: {
+  points: any[]
+  paramsRef: React.MutableRefObject<RadarParams>
+}) => {
+  const groupRef = useRef<THREE.Group>(null!)
+
   const [positions, colors] = useMemo(() => {
+    const params = paramsRef.current
     const pos = new Float32Array(points.length * 3)
     const cols = new Float32Array(points.length * 3)
-    
+
     points.forEach((p, i) => {
-      // Use spatial coordinates if available, else random
-      const coords = p.spatial?.layoutVectors || [0,0,0]
-      // Project 3072D to 3D roughly for visualization if needed, 
-      // but here we take the first 3 dimensions for the "Radar" feel
+      const coords = p.spatial?.layoutVectors || [0, 0, 0]
       pos[i * 3] = (coords[0] || (Math.random() - 0.5)) * 10
       pos[i * 3 + 1] = (coords[1] || (Math.random() - 0.5)) * 10
       pos[i * 3 + 2] = (coords[2] || (Math.random() - 0.5)) * 10
-      
+
       const color = new THREE.Color()
-      // Heat based on overallShatter or a heat metric
+      // Heat-based coloring: healthy = heatBase hue, shattered = shifted
       const heat = p.overallShatter || 0
-      color.setHSL(0.6 - heat * 0.4, 1, 0.5) 
+      color.setHSL(params.heatBase - heat * params.heatRange, 1, 0.5)
       cols[i * 3] = color.r
       cols[i * 3 + 1] = color.g
       cols[i * 3 + 2] = color.b
     })
-    
-    return [pos, cols]
-  }, [points])
 
-  useFrame((state) => {
-    if (ref.current) {
-      ref.current.rotation.y += 0.001
+    return [pos, cols]
+  }, [points, paramsRef])
+
+  // Per-frame updates read directly from paramsRef (no React re-render needed)
+  useFrame(() => {
+    if (groupRef.current) {
+      groupRef.current.rotation.y += paramsRef.current.rotationSpeed
     }
   })
 
   return (
-    <group ref={ref}>
+    <group ref={groupRef}>
       <Points positions={positions} colors={colors}>
         <PointMaterial
           transparent
           vertexColors
-          size={0.15}
+          size={paramsRef.current.particleSize}
           sizeAttenuation={true}
           depthWrite={false}
           blending={THREE.AdditiveBlending}
         />
       </Points>
-      
+
       <mesh>
         <sphereGeometry args={[0.1, 32, 32]} />
-        <meshBasicMaterial color="#FFD700" transparent opacity={0.3} />
+        <meshBasicMaterial
+          color="#FFD700"
+          transparent
+          opacity={paramsRef.current.coreOpacity}
+        />
       </mesh>
     </group>
   )
 }
 
+// ── Main Component ──────────────────────────────────────────
 export function SpectraRadar() {
-  const MAX_POINTS = 5000; // Plugin Allowance: Stabilize GPU/RAM during high-volume un-mocking
+  const containerRef = useRef<HTMLDivElement>(null)
+  const paramsRef = useRef<RadarParams>({ ...DEFAULT_PARAMS })
+
+  // tick counter: incremented by lil-gui onChange to trigger React re-renders
+  // for values that affect data fetching or React-managed props
+  const [tick, setTick] = useState(0)
+  const bump = () => setTick((t) => t + 1)
+
   const [points, setPoints] = useState<any[]>([])
   const [stats, setStats] = useState({
     signature: 'CALIBRATING',
-    points: 0
+    points: 0,
   })
 
+  // ── lil-gui Initialization (dynamic import for SSR safety) ─
   useEffect(() => {
+    let gui: any = null
+
+    import('lil-gui').then((mod) => {
+      const GUI = mod.default
+      gui = new GUI({
+        title: '⚡ SPECTRAL GOVERNANCE',
+        container: containerRef.current || undefined,
+      })
+
+      // Metropolis dark/gold styling via lil-gui CSS custom properties
+      Object.assign(gui.domElement.style, {
+        position: 'absolute',
+        top: '8px',
+        right: '8px',
+        zIndex: '100',
+        '--background-color': 'rgba(0, 0, 0, 0.92)',
+        '--text-color': '#999',
+        '--title-background-color': 'rgba(255, 215, 0, 0.08)',
+        '--title-text-color': '#FFD700',
+        '--widget-color': '#1a1a2e',
+        '--hover-color': 'rgba(255, 215, 0, 0.12)',
+        '--focus-color': '#FFD700',
+        '--number-color': '#FFD700',
+        '--string-color': '#FFD700',
+        '--font-family': "'Courier New', monospace",
+        '--font-size': '10px',
+      })
+
+      // ── ⚙ Resource Governor ─────────────────────────────
+      const perf = gui.addFolder('⚙ RESOURCE GOVERNOR')
+      perf
+        .add(paramsRef.current, 'maxPoints', 100, 10000, 100)
+        .name('Max Shards')
+        .onChange(bump)
+      perf
+        .add(paramsRef.current, 'pollInterval', 1000, 10000, 500)
+        .name('Poll Rate (ms)')
+        .onChange(bump)
+      perf.open()
+
+      // ── 👁 Visual Tuning ────────────────────────────────
+      const visual = gui.addFolder('👁 VISUAL TUNING')
+      visual
+        .add(paramsRef.current, 'particleSize', 0.01, 0.5, 0.01)
+        .name('Shard Size')
+        .onChange(bump)
+      visual
+        .add(paramsRef.current, 'rotationSpeed', 0, 0.01, 0.0005)
+        .name('Field Drift')
+      visual
+        .add(paramsRef.current, 'autoRotate')
+        .name('Auto Orbit')
+        .onChange(bump)
+      visual
+        .add(paramsRef.current, 'autoRotateSpeed', 0, 2, 0.1)
+        .name('Orbit Speed')
+        .onChange(bump)
+      visual
+        .add(paramsRef.current, 'coreOpacity', 0, 1, 0.05)
+        .name('Core Glow')
+        .onChange(bump)
+      visual.close()
+
+      // ── 🔬 Eve Spectral Config ──────────────────────────
+      const spectral = gui.addFolder('🔬 EVE SPECTRAL')
+      spectral
+        .add(paramsRef.current, 'heatBase', 0, 1, 0.01)
+        .name('Heat Base λ')
+        .onChange(bump)
+      spectral
+        .add(paramsRef.current, 'heatRange', 0, 1, 0.01)
+        .name('Heat Δ Range')
+        .onChange(bump)
+      spectral.close()
+    })
+
+    return () => {
+      if (gui) gui.destroy()
+    }
+  }, [])
+
+  // ── Telemetry Data Fetching ───────────────────────────────
+  useEffect(() => {
+    const maxPts = paramsRef.current.maxPoints
+    const interval = paramsRef.current.pollInterval
+
     const fetchData = async () => {
       try {
         const res = await fetch('http://localhost:3100/api/telemetry')
         const data = await res.json()
         if (data.spectralReport) {
-           // Enforce Allowance
-           const limitedReport = data.spectralReport.slice(0, MAX_POINTS)
-           setPoints(limitedReport)
-           setStats({
-             signature: data.safety?.intentSignature || 'ARMED',
-             points: data.spectralReport.length // Show true count in HUD, but render limited
-           })
+          // Enforce governance allowance
+          const limitedReport = data.spectralReport.slice(0, maxPts)
+          setPoints(limitedReport)
+          setStats({
+            signature: data.safety?.intentSignature || 'ARMED',
+            points: data.spectralReport.length,
+          })
         }
       } catch (e) {
-        // Fallback to mock if offline
+        // Fallback if telemetry engine is offline
       }
     }
-    
+
     fetchData()
-    const int = setInterval(fetchData, 3000)
+    const int = setInterval(fetchData, interval)
     return () => clearInterval(int)
-  }, [])
+  }, [tick])
 
   return (
-    <div className="relative w-full h-[500px] bg-black border border-border overflow-hidden group">
+    <div
+      ref={containerRef}
+      className="relative w-full h-[500px] bg-black border border-border overflow-hidden group"
+    >
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,215,0,0.05)_0%,transparent_70%)]" />
-      
+
       <Canvas camera={{ position: [0, 0, 15], fov: 45 }}>
         <color attach="background" args={['#000']} />
         <ambientLight intensity={0.4} />
         <pointLight position={[10, 10, 10]} intensity={1} />
-        
-        {points.length > 0 && <ParticleField points={points} />}
-        
-        <OrbitControls enableZoom={true} enablePan={false} autoRotate autoRotateSpeed={0.5} />
+
+        {points.length > 0 && (
+          <ParticleField points={points} paramsRef={paramsRef} />
+        )}
+
+        <OrbitControls
+          enableZoom={true}
+          enablePan={false}
+          autoRotate={paramsRef.current.autoRotate}
+          autoRotateSpeed={paramsRef.current.autoRotateSpeed}
+        />
       </Canvas>
 
       {/* HUD Layers */}
       <div className="absolute inset-0 p-8 font-mono text-[9px] uppercase tracking-widest pointer-events-none">
-         <div className="absolute top-8 left-8 text-gold">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-2 h-2 bg-gold animate-pulse" />
-              <span>SPECTRAL_CORE: A-MEM_3072D</span>
-            </div>
-            <div>MODE: TOPOLOGICAL AUDIT</div>
-            <div className="opacity-50">STATUS: {points.length > 0 ? 'REAL-TIME SYNC' : 'SIMULATING...'}</div>
-         </div>
-         
-         <div className="absolute bottom-8 right-8 text-white/40 text-right">
-            <div className="mb-1">SIG: {stats.signature}</div>
-            <div>SHARDS: {stats.points}</div>
-         </div>
+        <div className="absolute top-8 left-8 text-gold">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-2 h-2 bg-gold animate-pulse" />
+            <span>SPECTRAL_CORE: A-MEM_3072D</span>
+          </div>
+          <div>MODE: TOPOLOGICAL AUDIT</div>
+          <div className="opacity-50">
+            STATUS:{' '}
+            {points.length > 0 ? 'REAL-TIME SYNC' : 'SIMULATING...'}
+          </div>
+        </div>
+
+        <div className="absolute bottom-8 right-8 text-white/40 text-right">
+          <div className="mb-1">SIG: {stats.signature}</div>
+          <div>SHARDS: {stats.points}</div>
+          <div className="mt-1 text-gold/30">
+            RENDER: {points.length} / {paramsRef.current.maxPoints}
+          </div>
+        </div>
       </div>
 
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10">
-         <div className="px-6 py-3 bg-black/80 backdrop-blur-md border border-gold/20 text-center">
-            <div className="text-[10px] text-gold/60 mb-1 tracking-[0.3em]">REFRAG RESONANCE</div>
-            <div className="text-xl font-light text-white tracking-[0.2em] uppercase">Spectral Radar</div>
-         </div>
+        <div className="px-6 py-3 bg-black/80 backdrop-blur-md border border-gold/20 text-center">
+          <div className="text-[10px] text-gold/60 mb-1 tracking-[0.3em]">
+            REFRAG RESONANCE
+          </div>
+          <div className="text-xl font-light text-white tracking-[0.2em] uppercase">
+            Spectral Radar
+          </div>
+        </div>
       </div>
 
       <div className="absolute inset-0 pointer-events-none opacity-5 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,215,0,0.03),transparent,rgba(255,215,0,0.03))] bg-[length:100%_2px,3px_100%]" />
